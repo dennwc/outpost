@@ -1432,12 +1432,13 @@ function computePrimaryLabel({ ignoreReview = false } = {}) {
     const bits = [];
     bits.push(willCommit ? 'Commit' : null);
     bits.push(commit.push ? 'push' : null);
-    bits.push(commit.openPr && !s.prUrl && !onDefault ? 'open PR' : null);
+    bits.push(commit.openPr && !s.prUrl && !onDefault ? (commit.draftPr ? 'open draft PR' : 'open PR') : null);
     const parts = bits.filter(Boolean);
     return parts.length ? parts[0] + (parts.length > 1 ? ` & ${parts.slice(1).join(' & ')}` : '') : 'Push';
   }
   if (commit.mergeMode === 'merge-to-base') return 'Squash & merge';
-  return commit.openPr && !s.prUrl ? 'Squash, push & open PR' : 'Commit & push';
+  if (!commit.openPr || s.prUrl) return 'Commit & push';
+  return commit.draftPr ? 'Squash, push & open draft PR' : 'Squash, push & open PR';
 }
 
 // The commit dialog markup (message + merge mode + branch target + push/PR
@@ -1478,7 +1479,8 @@ function buildCommitDialogHtml() {
     && !(!isWorktree && onDefaultBranch)
     ? (s?.prUrl
       ? `<a class="dr-pr-open o-pill code" href="${escapeHtml(s.prUrl)}" target="_blank" rel="noopener">PR already open ↗</a>`
-      : `<label class="dr-checkbox"><input type="checkbox" id="dr-openpr" ${commit.openPr ? 'checked' : ''}>Open PR to main</label>`)
+      : `<label class="dr-checkbox"><input type="checkbox" id="dr-openpr" ${commit.openPr ? 'checked' : ''}>Open PR to main</label>`
+        + (commit.openPr ? `<label class="dr-checkbox" title="Let CI run before requesting reviewers"><input type="checkbox" id="dr-draftpr" ${commit.draftPr ? 'checked' : ''}>As draft</label>` : ''))
     : '';
   const prDraft = needsPrDraft();
   const prBlock = prDraft ? `
@@ -1524,6 +1526,7 @@ function wireCommitDialogEvents(root, { onCommit }) {
   });
   root.querySelector('#dr-push')?.addEventListener('change', (e) => { diffState.commit.push = e.target.checked; onCommit.rerender(); });
   root.querySelector('#dr-openpr')?.addEventListener('change', (e) => { diffState.commit.openPr = e.target.checked; onCommit.rerender(); });
+  root.querySelector('#dr-draftpr')?.addEventListener('change', (e) => { diffState.commit.draftPr = e.target.checked; onCommit.rerender(); });
   root.querySelector('#dr-new-branch')?.addEventListener('input', (e) => { diffState.commit.newBranch = e.target.value; });
   root.querySelector('#dr-pr-title')?.addEventListener('input', (e) => { diffState.commit.prTitle = e.target.value; });
   root.querySelector('#dr-pr-body')?.addEventListener('input', (e) => { diffState.commit.prBody = e.target.value; });
@@ -1804,8 +1807,8 @@ function doPush(sessionId) {
   return runSourceAction('push', 'git/push', {}, { success: 'Push complete.', failure: 'Push failed.' });
 }
 
-function doOpenPr(sessionId) {
-  return runSourceAction('open-pr', 'git/open-pr', { body: JSON.stringify({}) }, { success: 'Pull request opened.', failure: 'Open PR failed.' });
+function doOpenPr(sessionId, draft) {
+  return runSourceAction('open-pr', 'git/open-pr', { body: JSON.stringify({ draft }) }, { success: draft ? 'Draft pull request opened.' : 'Pull request opened.', failure: 'Open PR failed.' });
 }
 
 function doCreateBranch(sessionId, newBranch) {
@@ -1918,7 +1921,7 @@ async function runCommitAction() {
     if (commit.push && !(await doPush(sessionId))) return;
     const live = sourceCtl.status ?? s;
     const onDefault = Boolean(live.branch && live.defaultBranch && live.branch === live.defaultBranch);
-    if (commit.openPr && !live.prUrl && !onDefault) await doOpenPr(sessionId);
+    if (commit.openPr && !live.prUrl && !onDefault) await doOpenPr(sessionId, commit.draftPr);
     return;
   }
 
@@ -1938,7 +1941,7 @@ async function runCommitAction() {
   if (commit.openPr && !s.prUrl) {
     const newBranch = commit.newBranch.trim();
     if (!newBranch) { setSourceFeedback('err', 'Branch name required.'); return; }
-    await doFinalize(sessionId, { kind: 'squash-to-branch', message, newBranch, ...(pr ?? {}) });
+    await doFinalize(sessionId, { kind: 'squash-to-branch', message, newBranch, draft: commit.draftPr, ...(pr ?? {}) });
     return;
   }
   // "Open PR" unchecked on squash-to-branch: finalize's squash-to-branch endpoint

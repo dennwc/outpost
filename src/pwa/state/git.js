@@ -35,6 +35,7 @@ export const diffState = {
     variant: 0, // ⌘R cycles through deterministic draft templates
     push: true,
     openPr: true,
+    draftPr: false,
     mergeMode: 'squash-to-branch', // 'squash-to-branch' | 'merge-to-base'
     newBranch: '',
   },
@@ -100,7 +101,7 @@ export function resetGitState() {
   diffState.refs.worktree = { base: 'HEAD', head: 'working tree' };
   diffState.commit = {
     message: '', autoFilled: false, variant: 0,
-    push: true, openPr: true, mergeMode: 'squash-to-branch', newBranch: '',
+    push: true, openPr: true, draftPr: false, mergeMode: 'squash-to-branch', newBranch: '',
   };
 
   sourceCtl.status = null;

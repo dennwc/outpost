@@ -356,10 +356,10 @@ export function registerGitRoutes(server: Server, deps: GitRoutesDeps): void {
       return;
     }
     if (refuseIfReadonly(worktreeManager, engine, m[1]!, res)) return;
-    const payload = await readJsonObject<{ title?: string; body?: string; base?: string }>(req, res, { allowEmpty: true });
+    const payload = await readJsonObject<{ title?: string; body?: string; base?: string; draft?: boolean }>(req, res, { allowEmpty: true });
     if (!payload) return;
     engine.markPrOpening(m[1]!);
-    const result = await gitOpenPr(resolved.cwd, { ...payload, reviewers: reviewersForCwd(preferencesStore.getPrReviewers(), resolved.cwd) });
+    const result = await gitOpenPr(resolved.cwd, { ...payload, draft: payload.draft === true, reviewers: reviewersForCwd(preferencesStore.getPrReviewers(), resolved.cwd) });
     engine.finishPrOpening(m[1]!, result.ok ? result.url : undefined);
     let status;
     try { status = await gitStatus(resolved.cwd); } catch { status = null; }
@@ -416,7 +416,7 @@ export function registerGitRoutes(server: Server, deps: GitRoutesDeps): void {
       res.end(JSON.stringify({ error: 'this session\'s workspace is a read-only checkout — finalize is not available' }));
       return;
     }
-    const payload = await readJsonObject<{ kind?: string; message?: string; newBranch?: string; push?: boolean; prTitle?: string; prBody?: string }>(req, res);
+    const payload = await readJsonObject<{ kind?: string; message?: string; newBranch?: string; push?: boolean; prTitle?: string; prBody?: string; draft?: boolean }>(req, res);
     if (!payload) return;
     const message = typeof payload.message === 'string' ? payload.message : '';
     if (message.trim().length === 0) {
@@ -458,9 +458,10 @@ export function registerGitRoutes(server: Server, deps: GitRoutesDeps): void {
       // Only the squash path opens a PR; an append fast-forwards one that's already there.
       if (!exists) engine.markPrOpening(sessionId);
       const reviewers = reviewersForCwd(preferencesStore.getPrReviewers(), rec.worktreePath);
+      const draft = payload.draft === true;
       const result: GitCommandResult & { url?: string; warning?: string } = exists
-        ? await gitFinalizeAppendToBranch({ worktreePath: rec.worktreePath, branch: payload.newBranch, baseBranch, reviewers })
-        : await gitFinalizeSquashToBranch({ worktreePath: rec.worktreePath, baseBranch, baseRef: diffBaseFor(rec), newBranch: payload.newBranch, message, reviewers, ...(pr ? { pr } : {}) });
+        ? await gitFinalizeAppendToBranch({ worktreePath: rec.worktreePath, branch: payload.newBranch, baseBranch, reviewers, draft })
+        : await gitFinalizeSquashToBranch({ worktreePath: rec.worktreePath, baseBranch, baseRef: diffBaseFor(rec), newBranch: payload.newBranch, message, reviewers, draft, ...(pr ? { pr } : {}) });
       if (!exists) engine.finishPrOpening(sessionId, result.ok ? result.url : undefined);
       // The PR head moved (or a new PR opened) — nudge the watcher so the owning step's
       // controller learns of it without waiting on the hourly sweep.

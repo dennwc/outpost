@@ -209,6 +209,23 @@ describe('WorkEngine ↔ LaunchGovernor', () => {
     expect(h.spawns).toHaveLength(2);   // slot freed → job2 launched
   });
 
+  it('a step session that exits on its own fails the step with its stderr; an expected close does not', async () => {
+    const h = makeHarness({ snapshot: healthy, concurrency: 2 });
+    const crashedJob = await seedExecuting(h, [actionStep()]);
+    const crashed = h.queue.get(crashedJob)!.steps.find((s) => s.sessionId)!;
+    const reapedJob = await seedExecuting(h, [actionStep()]);
+    const reaped = h.queue.get(reapedJob)!.steps.find((s) => s.sessionId)!;
+
+    h.engine.onSessionExit(crashed.sessionId!, 1, { stderrTail: '[claude stderr] boom\n' });
+    h.engine.onSessionExit(reaped.sessionId!, 0, { expected: 'idle', stderrTail: '' });
+    await flush();
+
+    const failure = h.queue.get(crashedJob)!.steps.find((s) => s.id === crashed.id)!.failure;
+    expect(failure?.reason).toContain('session exited unexpectedly (code 1)');
+    expect(failure?.reason).toContain('boom');
+    expect(h.queue.get(reapedJob)!.steps.find((s) => s.id === reaped.id)!.failure).toBeUndefined();
+  });
+
   it('launchOrchestrator fires immediately when the slot is busy (manual runs bypass concurrency)', async () => {
     const h = makeHarness({ snapshot: healthy, concurrency: 1 });
     await seedExecuting(h, [actionStep()]);   // slot occupied by the live step session

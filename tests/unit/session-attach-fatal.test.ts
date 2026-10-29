@@ -29,7 +29,7 @@ describe('SessionManager.attach rejections', () => {
   it('marks an unresolvable session fatal and closes', () => {
     const { sent, close } = attachAndCapture({});
     expect(sent).toEqual([
-      { type: 'daemon_error', fatal: true, message: 'cwd required for new session' },
+      { type: 'daemon_error', fatal: true, message: 'session dead-ses has no live process and no transcript to resume' },
     ]);
     expect(close).toHaveBeenCalled();
   });

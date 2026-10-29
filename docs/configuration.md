@@ -20,6 +20,33 @@ LINEAR_API_TOKEN=lin_api_...
 
 Standard `KEY=value` syntax, `#` comments allowed, `export KEY=value` tolerated. Run `chmod 600 ~/.outpost/.env` after creating it, then restart Outpost.
 
+### Or keep the secrets in 1Password
+
+Any value that starts with `op://` is a [1Password CLI](https://developer.1password.com/docs/cli/) reference. The daemon resolves it through `op` at startup, so the file holds a pointer rather than the secret:
+
+```bash
+# Reference an item, not a value. Titles work, including ones with spaces;
+# an item ID works too and survives a rename.
+LINEAR_API_TOKEN=op://Employee/linear-api-key/password
+GITHUB_TOKEN=op://Employee/github-pat/token
+```
+
+`op read` runs once per distinct reference, and plain `KEY=value` lines in the same file are unaffected. The CLI has to be signed in. With the desktop app, expect an unlock prompt when the daemon starts if 1Password is locked.
+
+A reference that won't resolve (1Password locked, item renamed, `op` missing) logs a warning and leaves that key unset until the next restart. The daemon still boots. If the unlock prompt goes unanswered for 60 seconds, the remaining references are skipped rather than each waiting out its own timeout, so a locked vault delays startup by at most a minute. To make an unresolvable reference fatal instead:
+
+```bash
+echo 'OUTPOST_ENV_STRICT=1' >> ~/.outpost/.env
+```
+
+If `op` isn't on the daemon's `PATH` (launchd doesn't inherit your shell's), name it outright. `/opt/homebrew/bin/op` and `/usr/local/bin/op` are searched automatically:
+
+```bash
+echo 'OUTPOST_OP_BIN=/path/to/op' >> ~/.outpost/.env
+```
+
+Both lines are read from this file, so there's no need to touch the plist.
+
 ## Environment variables
 
 Precedence: **plist `EnvironmentVariables` > `~/.outpost/.env` > built-in defaults.** To override one permanently, add it to `~/.outpost/.env`, or to the plist under `<key>EnvironmentVariables</key>`, then restart.
@@ -38,7 +65,7 @@ Precedence: **plist `EnvironmentVariables` > `~/.outpost/.env` > built-in defaul
 | `OUTPOST_STOP_THRESHOLD_MS` | `30000` | How long a session must be idle before a stop-hook counts it as done (drives "needs you" notifications). |
 | `OUTPOST_PUSH_TTL_SECONDS` | `60` | TTL on outgoing Web Push messages. |
 
-Anything else (`OUTPOST_CERT_PATH`, `OUTPOST_KEY_PATH`, `OUTPOST_ALLOWLIST_PATH`, `OUTPOST_VAPID_PATH`, `OUTPOST_PUSH_SUBS_PATH`) exists for power users — see `src/config.ts` for the full list.
+Anything else (`OUTPOST_CERT_PATH`, `OUTPOST_KEY_PATH`, `OUTPOST_ALLOWLIST_PATH`, `OUTPOST_VAPID_PATH`, `OUTPOST_PUSH_SUBS_PATH`) exists for power users — see `src/config.ts` for the full list. `OUTPOST_ENV_STRICT` and `OUTPOST_OP_BIN` are covered under [Or keep the secrets in 1Password](#or-keep-the-secrets-in-1password).
 
 ## Running the service
 

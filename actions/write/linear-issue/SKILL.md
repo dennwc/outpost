@@ -27,12 +27,12 @@ Create a Linear issue. Returns the resulting issue identifier + URL.
 
 ## The write-draft protocol
 
-This action follows the shared draft/commit protocol — see
-`~/.outpost/actions/SHARED-write-drafts.md` for the full mechanics (the tool shape, the
-three outcomes, where `writeGate` lives, the rules that don't bend). This action has no
-`Read`/`Grep` grant — `cat` the absolute path instead, reachable via `core`'s `^cat ` pattern
-regardless of what else this action inherits. This is a standalone action step, so `writeGate`
-is at `typePayload.writeGate` in `$OUTPOST_ENVELOPE`.
+This action follows the shared draft/commit protocol (`SHARED-write-drafts.md`), but it
+inherits no `read` group, so it cannot open that file — everything it needs is below. The one
+file it can read is the envelope, spelled exactly `cat "$OUTPOST_ENVELOPE"` (or
+`jq <filter> "$OUTPOST_ENVELOPE"`). The double quotes are required: unquoted
+`$OUTPOST_ENVELOPE`, `printenv`, `echo`, and any other path are all denied. This is a
+standalone action step, so `writeGate` is at `typePayload.writeGate`.
 
 Load your tools first (deferred behind ToolSearch):
 

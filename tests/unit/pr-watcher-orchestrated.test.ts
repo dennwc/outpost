@@ -144,6 +144,51 @@ describe('PrWatcher over an orchestrated step', () => {
     expect(item.events).toEqual(['pr-state']);
   });
 
+  it('drops a conflict once a new head lands, without waking the controller that pushed it', async () => {
+    const { watcher, engine } = harness(
+      orchestratedStepWithPr({ mergeable: 'conflicting', headRefOid: 'a'.repeat(40) }),
+      { mergeable: 'unknown', headRefOid: 'b'.repeat(40) },
+    );
+    await watcher.syncJob('j1');
+    expect(engine.applyPrFacts.mock.calls[0]![2]).toMatchObject({ mergeable: 'unknown' });
+    expect(eventsFrom(engine)).not.toContain('pr-state');
+  });
+
+  it('holds a conflict through UNKNOWN while the head has not moved', async () => {
+    const head = 'a'.repeat(40);
+    const { watcher, engine } = harness(
+      orchestratedStepWithPr({ mergeable: 'conflicting', headRefOid: head }),
+      { mergeable: 'unknown', headRefOid: head },
+    );
+    await watcher.syncJob('j1');
+    expect(engine.applyPrFacts.mock.calls[0]![2]).not.toHaveProperty('mergeable');
+  });
+
+  it('reports the cleared conflict when the new head reads mergeable', async () => {
+    const head = 'b'.repeat(40);
+    const { watcher, engine } = harness(
+      orchestratedStepWithPr({ mergeable: 'unknown', headRefOid: head }),
+      { mergeable: 'mergeable', headRefOid: head },
+    );
+    await watcher.syncJob('j1');
+    expect(eventsFrom(engine)).toEqual(['pr-state']);
+  });
+
+  it('records unpushed work without waking the controller', async () => {
+    const step = orchestratedStepWithPr({ mergeable: 'mergeable' });
+    const job = { id: 'j1', steps: [step] };
+    const engine = { applyPrFacts: vi.fn(), pushStepInbox: vi.fn() };
+    const watcher = new PrWatcher({
+      queue: { get: () => job, list: () => [job] } as never,
+      engine: engine as never,
+      runGh: stubGh({ mergeable: 'mergeable' }),
+      unpushedWork: async () => true,
+    });
+    await watcher.syncJob('j1');
+    expect(engine.applyPrFacts).toHaveBeenCalledWith('j1', 's1', { hasUnpushedWork: true });
+    expect(engine.pushStepInbox).not.toHaveBeenCalled();
+  });
+
   // Nothing known yet — an UNKNOWN is the only thing there is to record.
   it('records UNKNOWN when there is no prior verdict to hold', async () => {
     const step = orchestratedStepWithPr({});

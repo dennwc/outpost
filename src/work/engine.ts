@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { JobQueue } from './work-queue.js';
 import type { DraftVerdictDetail } from './draft-verdict.js';
-import type { SessionManager } from '../session/session-manager.js';
+import type { SessionManager, SessionExit } from '../session/session-manager.js';
 import type { WorktreeManager, WorktreeRecord } from '../git/worktree-manager.js';
 import type { LinearWriter } from '../integrations/linear-writer.js';
 import type {
@@ -58,7 +58,7 @@ import { readMergeReadiness } from './merge-readiness.js';
 import { readRerunReadiness } from './rerun-readiness.js';
 import { clampToCeiling, describePreapprovals, effectivePreapprovals } from './preapprovals.js';
 import { runGh as defaultRunGh, type RunGh } from '../integrations/gh-cli.js';
-import { gitMergingFromBase } from '../git/git-ops.js';
+import { gitHasUnpushedWork, gitMergingFromBase } from '../git/git-ops.js';
 import { reviewersForCwd } from '../git/pr-reviewers.js';
 import {
   currentDraftForRaiser, matchPinnedCall, writeGateFor,
@@ -705,9 +705,16 @@ export class WorkEngine {
     }
   }
 
-  // No-op stub kept for parity with the prior interface. Session role bookkeeping
-  // is in-memory only; on daemon restart all child sessions die anyway.
-  onSessionExit(_sessionId: string, _code: number | null): void { /* intentionally empty */ }
+  // A crash fires no Stop hook, so without this a step whose subprocess died stays `running` forever.
+  onSessionExit(sessionId: string, code: number | null, exit: SessionExit): void {
+    if (exit.expected) return;
+    const target = this.unresolvedFailable(sessionId);
+    if (!target) return;
+    this.cancelUnresolvedCheck(sessionId);
+    const tail = exit.stderrTail.trim().split('\n').slice(-5).join('\n');
+    this.onStepFailed(target.jobId, target.stepId,
+      `session exited unexpectedly (code ${code ?? 'none'})${tail ? `: ${tail}` : ''}`, { journal: false });
+  }
 
   private async tickOne(jobId: string): Promise<void> {
     let j = this.opts.queue.get(jobId);
@@ -2237,6 +2244,22 @@ export class WorkEngine {
     if (!this.jobAcceptsStepWork(jobId)) return;
     applyMove(this.orchestratedHost(), jobId, stepId, p);
     this.syncOrchestratedWake(jobId, stepId);
+    void this.refreshUnpushedWork(jobId, stepId);
+  }
+
+  // What PrWatcher reads into `pr.hasUnpushedWork`; undefined for a step with no live worktree
+  async readUnpushedWork(stepId: string): Promise<boolean | undefined> {
+    const rec = this.opts.worktreeManager.get(stepId);
+    if (!rec || rec.archivedAt) return undefined;
+    return gitHasUnpushedWork(rec.worktreePath);
+  }
+
+  // A controller that just parked on "push this" can't wait for the watcher's next sweep to say so
+  private async refreshUnpushedWork(jobId: string, stepId: string): Promise<void> {
+    const s = this.opts.queue.get(jobId)?.steps.find((x) => x.id === stepId);
+    if (s?.type !== 'orchestrated' || s.workspace.kind !== 'writable') return;
+    const has = await this.readUnpushedWork(stepId);
+    if (has !== undefined) this.applyPrFacts(jobId, stepId, { hasUnpushedWork: has });
   }
 
   pushStepInbox(jobId: string, stepId: string, item: NewItem): void {

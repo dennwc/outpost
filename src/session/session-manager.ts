@@ -34,6 +34,14 @@ interface ActiveSession {
   spawnCwd: string;
   // Ids we've already fired onSessionRegistered for (guards against re-firing every init message).
   registeredIds: Set<string>;
+  stderrTail: string;
+}
+
+const STDERR_TAIL_CHARS = 2000;
+
+export interface SessionExit {
+  expected?: SessionCloseReason;
+  stderrTail: string;
 }
 
 function isInitMessage(msg: unknown): boolean {
@@ -60,7 +68,7 @@ export interface SessionManagerOpts {
   onTurnStart?: (sessionId: string) => void;
   // Fires when a spawned claude subprocess exits. Used by the work orchestrator to detect
   // investigator/implementer/responder sessions that died without signalling completion.
-  onSessionExit?: (sessionId: string, code: number | null) => void;
+  onSessionExit?: (sessionId: string, code: number | null, exit: SessionExit) => void;
   // Fires the first time claude emits its system/init message (JSONL is on disk by then).
   // Daemon fans this out as a `sessions_changed` notification so the PWA can refresh its
   // list without waiting for a full reload.
@@ -126,7 +134,7 @@ export class SessionManager {
     if (!opts.cwd || !opts.cwd.startsWith('/')) {
       this.rejectAttach(ws, opts.cwd
         ? `cwd must be absolute: ${opts.cwd}`
-        : 'cwd required for new session');
+        : `session ${sessionId.slice(0, 8)} has no live process and no transcript to resume`);
       return;
     }
     try {
@@ -376,6 +384,7 @@ export class SessionManager {
       proc: null!,
       spawnCwd: cwd,
       registeredIds: new Set(),
+      stderrTail: '',
     };
     const mode = this.opts.sessionStore.findSession(sessionId) ? 'resume' : 'new';
     const permissionMode = this.permissionModes.get(sessionId);
@@ -408,6 +417,9 @@ export class SessionManager {
         }
       },
       onError: (errMsg) => {
+        // A detached session has no client to show this to, so it would otherwise vanish
+        console.warn(`[session ${s.id.slice(0, 8)}] ${errMsg.trimEnd()}`);
+        s.stderrTail = (s.stderrTail + errMsg).slice(-STDERR_TAIL_CHARS);
         if (isAuthFailure(errMsg)) this.opts.onAuthFailure?.(s.id, errMsg);
         for (const ws of s.clients) {
           ws.send(JSON.stringify({ type: 'daemon_error', message: errMsg }));
@@ -423,7 +435,7 @@ export class SessionManager {
         this.active.delete(s.id);
         this.working.delete(s.id);
         this.reloadWhenIdle.delete(s.id);
-        this.opts.onSessionExit?.(s.id, code);
+        this.opts.onSessionExit?.(s.id, code, { expected, stderrTail: s.stderrTail });
       },
     });
     this.active.set(sessionId, s);

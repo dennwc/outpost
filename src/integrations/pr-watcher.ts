@@ -9,12 +9,15 @@ import { gitRemoteBranchHead } from '../git/git-ops.js';
 import { runGh as defaultRunGh, type RunGh } from './gh-cli.js';
 
 export type RemoteHead = (cwd: string, branch: string) => Promise<string | undefined>;
+export type UnpushedWork = (stepId: string) => Promise<boolean | undefined>;
 
 export interface PrWatcherOpts {
   queue: JobQueue;
   engine: WorkEngine;
   runGh?: RunGh;
   remoteHead?: RemoteHead;
+  // Unset leaves `hasUnpushedWork` untracked
+  unpushedWork?: UnpushedWork;
 }
 
 interface GhPrView {
@@ -198,7 +201,9 @@ function changedSignals(
   if (moved('reviewState')) events.push('review-state');
   // Mergeability rides on `pr-state`: a PR that just started conflicting is the
   // controller's problem now, and there is no separate signal for it to wait on.
-  if (moved('prUrl') || moved('prState') || moved('mergeable')) events.push('pr-state');
+  // Into `unknown` is GitHub recomputing after a push, which no row reads.
+  const mergeableMoved = moved('mergeable') && next.mergeable !== 'unknown';
+  if (moved('prUrl') || moved('prState') || mergeableMoved) events.push('pr-state');
   // Only once there is a previous sha to have moved *from*. A step polled for the first
   // time — or resumed from PrFacts persisted before this field existed — has none, and
   // reporting the sha it just learned as a push would send a live controller off to
@@ -380,6 +385,7 @@ export class PrWatcher {
         await this.syncStep(jobId, s, ws.repoCwd, ws.branch).catch((e) => {
           console.error(`[pr-watcher] ${jobId} ${s.id} ${s.pr?.prUrl ?? ws.branch}: ${(e as Error).message}`);
         });
+        await this.syncUnpushedWork(jobId, s);
         continue;
       }
       // A readonly workspace (e.g. a review step, detached at the PR head) has no branch
@@ -396,6 +402,13 @@ export class PrWatcher {
         console.error(`[pr-watcher] ${jobId} ${s.id} ${knownUrl}: ${(e as Error).message}`);
       });
     }
+  }
+
+  // Never a wake: the controller that's waiting on this push is woken by what the push moves
+  private async syncUnpushedWork(jobId: string, s: OrchestratedStep): Promise<void> {
+    if (!this.opts.unpushedWork) return;
+    const has = await this.opts.unpushedWork(s.id);
+    if (has !== undefined) this.opts.engine.applyPrFacts(jobId, s.id, { hasUnpushedWork: has });
   }
 
   private knownPrUrl(s: OrchestratedStep): string | undefined {
@@ -489,7 +502,10 @@ export class PrWatcher {
     // flip as a `pr-state` event. One step accumulated 76 identical "PR open" wakes that way.
     // Holding the last known verdict also keeps a real one legible: unknown→conflicting used to
     // fire from a prev of 'unknown', now it fires from 'mergeable', which is the actual news.
-    if (mergeable && !(mergeable === 'unknown' && prev.mergeable !== undefined)) {
+    // Except a conflict on an older head, or it outlives the push that resolved it
+    const staleConflict = prev.mergeable === 'conflicting'
+      && prev.headRefOid !== undefined && facts.headRefOid !== undefined && facts.headRefOid !== prev.headRefOid;
+    if (mergeable && (mergeable !== 'unknown' || prev.mergeable === undefined || staleConflict)) {
       facts.mergeable = mergeable;
     }
 

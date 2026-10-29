@@ -339,6 +339,8 @@ function statusOf(s) {
   }
   const reason = s.waitingOn?.reason;
   if (s.state === 'waiting') {
+    // Outranks the PR's own state: "Ready to merge" over unpushed review fixes is the controller waiting on you
+    if (s.pr?.hasUnpushedWork && !s.waitingOn?.untilAllDispatchesDone) return parked('↑', null, 'Waiting for push', reason);
     const pr = prStatusOf(s);
     if (pr) return { ...pr, kind: 'parked', detail: reason ?? null };
     // Row 8: implemented, no PR, parked until the branch lands on origin.

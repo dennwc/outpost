@@ -2,7 +2,6 @@ import { gatedMatch, type Allowlist } from './allowlist.js';
 import type { ApprovalQueue, PendingApproval } from './approvals.js';
 import { ApprovalModeStore, PLAN_MODE_ALWAYS, isPlanModeReadableMcpTool } from './approval-mode.js';
 import type { ActionAllowlist } from '../actions/types.js';
-import { extractFileReferences } from './file-flags.js';
 import { verifyFileDigests } from '../work/write-draft.js';
 
 export interface HookInput {
@@ -110,9 +109,8 @@ export interface HandleHookOpts {
   // session's step: for a dispatch session, the bound step is the parent orchestrated step,
   // whose action is the CONTROLLER, not the child action the hook actually denied.
   onGatedDenial?: (sessionId: string, action: string, reason: string) => void;
-  // Has the user taken the wheel on this session? A driven action session keeps its confined
-  // grants but raises an approval card on a miss instead of denying, and honours the mode
-  // gestures an autopilot step session has no approver for.
+  // Has the user taken the wheel on this session? A driven session is gated as a manual one —
+  // its action binding is ignored until the user hands it back.
   interactiveFor?: (sessionId: string) => boolean;
   onNotify: (approval: PendingApproval) => void;
   // Called when an action-bound session has a tool call denied by allowlist-miss.
@@ -190,19 +188,6 @@ function fileDigestMismatchReason(): string {
     + 'mcp__outpost__submit_write_draft and wait for a new approval.';
 }
 
-// Without this a driven session got the draft-state reason, which sent it chasing unrelated
-// pending drafts instead of the one change that makes the call approvable
-const DRIVEN_FILE_PAYLOAD = 'The user is driving and can approve this write directly, but its payload '
-  + 'is in a file the approval card cannot display. Run it again with the payload inline instead '
-  + "(e.g. `git commit -m '…'`, `gh pr comment 7 --body '…'`). Pending drafts on this step are "
-  + 'unrelated; there is nothing to wait for.';
-
-function carriesPayloadInline(toolName: string, toolInput: unknown): boolean {
-  if (toolName !== 'Bash') return true;
-  const command = (toolInput as { command?: unknown } | null)?.command;
-  return typeof command === 'string' && extractFileReferences(command)?.length === 0;
-}
-
 export async function handleHook(opts: HandleHookOpts): Promise<HookResponse> {
   const {
     hookInput, allowlist, queue, modes, cwdForSession, worktreePathForSession, actionForSession,
@@ -210,31 +195,7 @@ export async function handleHook(opts: HandleHookOpts): Promise<HookResponse> {
     interactiveFor,
   } = opts;
   const mode = modes.get(hookInput.session_id);
-  const action = actionForSession?.(hookInput.session_id);
-
-  // Park the call on the interactive approval queue and answer with the user's verdict.
-  // Shared by an ordinary session's allowlist miss and a driven action session's — see the
-  // `driven` branch below.
-  const enqueue = async (): Promise<HookResponse> => {
-    const decisionPromise = queue.enqueue({
-      sessionId: hookInput.session_id,
-      toolName: hookInput.tool_name,
-      toolInput: hookInput.tool_input,
-      toolUseId: hookInput.tool_use_id,
-      agentId: hookInput.agent_id,
-      agentType: hookInput.agent_type,
-    });
-    const pending = queue.listPending().at(-1);
-    if (pending) onNotify(pending);
-    const decision = await decisionPromise;
-    return {
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: decision.allow ? 'allow' : 'deny',
-        ...(decision.reason ? { permissionDecisionReason: decision.reason } : {}),
-      },
-    };
-  };
+  const action = interactiveFor?.(hookInput.session_id) ? undefined : actionForSession?.(hookInput.session_id);
 
   // Bypass: short-circuit before any check — except for an action-bound session. A step
   // session is never put in bypass deliberately (it has no mode selector of its own), but
@@ -271,20 +232,6 @@ export async function handleHook(opts: HandleHookOpts): Promise<HookResponse> {
   const projectCwd = cwdForSession?.(hookInput.session_id);
   const worktreePath = worktreePathForSession?.(hookInput.session_id);
   if (action) {
-    const driven = interactiveFor?.(hookInput.session_id) ?? false;
-    // The mode gestures are gated behind `!action` above because an autopilot step session has
-    // no approver. A driven one does, so they apply here. `bypass` is deliberately absent: it
-    // would take the write gate off a session that can push, and the PWA doesn't offer it.
-    if (driven) {
-      if (mode === 'plan') {
-        if (PLAN_MODE_ALWAYS.has(hookInput.tool_name)) return allowResp();
-        if (hookInput.tool_name.startsWith('mcp__') && isPlanModeReadableMcpTool(hookInput.tool_name)) {
-          return allowResp();
-        }
-        return denyResp('Plan mode — read-only');
-      }
-      if (mode === 'accept-edits' && EDIT_TOOLS.has(hookInput.tool_name)) return allowResp();
-    }
     const gated = gatedForAction?.(action);
     if (gatedForAction && !gated) {
       // The registry has never heard of this action — not "inherits no gated group" (that
@@ -307,14 +254,6 @@ export async function handleHook(opts: HandleHookOpts): Promise<HookResponse> {
     // `$VAR` or a `>` redirect outside the worktree, see Critical 1 in review round 1).
     if (gated && gatedMatch(gated, hookInput.tool_name, hookInput.tool_input)) {
       const pin = pinFor?.(hookInput.session_id, hookInput.tool_name, hookInput.tool_input);
-      // A driven session has an approver attached, and the card shows the whole payload unless
-      // a file flag carries it — that one still needs a draft, whose card renders the body.
-      if (!pin && driven) {
-        if (!carriesPayloadInline(hookInput.tool_name, hookInput.tool_input)) return denyResp(DRIVEN_FILE_PAYLOAD);
-        if (allowlist.allows(hookInput.tool_name, hookInput.tool_input, projectCwd, action, worktreePath, hookInput.session_id)) {
-          return enqueue();
-        }
-      }
       const pinMatched = !!pin;
       if (!pin || !allowlist.allows(hookInput.tool_name, hookInput.tool_input, projectCwd, action, worktreePath, hookInput.session_id)) {
         const draftState = draftStateFor?.(hookInput.session_id) ?? 'none';
@@ -348,10 +287,6 @@ export async function handleHook(opts: HandleHookOpts): Promise<HookResponse> {
     if (allowlist.allows(hookInput.tool_name, hookInput.tool_input, projectCwd, action, worktreePath, hookInput.session_id)) {
       return allowResp();
     }
-    // A miss while the user is driving is them steering, not the action failing — so it raises
-    // a card they can answer, and records nothing. DenialsStore is meta.improve-actions'
-    // evidence; a denial row here would describe a conversation.
-    if (driven) return enqueue();
     onActionDenial?.({
       actionName: action,
       sessionId: hookInput.session_id,
@@ -367,5 +302,22 @@ export async function handleHook(opts: HandleHookOpts): Promise<HookResponse> {
     return allowResp();
   }
 
-  return enqueue();
+  const decisionPromise = queue.enqueue({
+    sessionId: hookInput.session_id,
+    toolName: hookInput.tool_name,
+    toolInput: hookInput.tool_input,
+    toolUseId: hookInput.tool_use_id,
+    agentId: hookInput.agent_id,
+    agentType: hookInput.agent_type,
+  });
+  const pending = queue.listPending().at(-1);
+  if (pending) onNotify(pending);
+  const decision = await decisionPromise;
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: decision.allow ? 'allow' : 'deny',
+      ...(decision.reason ? { permissionDecisionReason: decision.reason } : {}),
+    },
+  };
 }

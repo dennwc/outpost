@@ -282,6 +282,14 @@ describe('orchestratedRows', () => {
       expect(pick(vm)).toEqual(['↑', null, 'Waiting for push']);
       expect(vm.statusDetail).toBe('Push it');
     });
+
+    it('unpushed work outranks a ready PR, but not a fan-out the controller is waiting on', () => {
+      const ready = { ciState: 'success', reviewState: 'approved', hasUnpushedWork: true };
+      expect(pick(parkedOn(ready))).toEqual(['↑', null, 'Waiting for push']);
+      expect(parkedOn(ready).statusDetail).toBe('PR #2029 is ready to merge.');
+      expect(pick(parkedOn(ready, { waitingOn: { reason: 'lenses', untilAllDispatchesDone: true } })))
+        .toEqual(['→', 'ok', 'Ready to merge']);
+    });
   });
 
   it('marks the newest artifact only while the step is still moving', () => {

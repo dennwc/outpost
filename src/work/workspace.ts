@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import type { WorkspaceRef } from './work-types.js';
 
 // A step's workspace is authored outside the daemon — by a planner via submit_plan, or by the
@@ -19,6 +20,29 @@ export function workspaceError(ws: WorkspaceRef | undefined): string | null {
   if (kind === 'writable') {
     const branch = (ws as { branch?: unknown }).branch;
     if (typeof branch !== 'string' || !branch.trim()) return 'workspace.writable requires branch';
+    return branchPathConflict(repoCwd, branch);
+  }
+  return null;
+}
+
+// `refactor` and `refactor/x` can't coexist as refs, locally or on origin — only a rename gets past it
+function branchPathConflict(repoCwd: string, branch: string): string | null {
+  const parts = branch.split('/');
+  let refs: string[];
+  try {
+    refs = execFileSync(
+      'git',
+      ['-C', repoCwd, 'for-each-ref', '--format=%(refname)', `refs/heads/${parts[0]}`, `refs/remotes/origin/${parts[0]}`],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).split('\n').filter(Boolean);
+  } catch { return null; }
+  const prefixes = new Set(parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/')));
+  for (const ref of refs) {
+    const name = ref.replace(/^refs\/(heads|remotes\/origin)\//, '');
+    if (prefixes.has(name) || name.startsWith(`${branch}/`)) {
+      return `workspace.writable branch ${JSON.stringify(branch)} collides with existing ref ${JSON.stringify(ref)} in ${repoCwd} — `
+        + 'git stores branches as paths, so one can\'t be a directory of the other. Pick a different branch name';
+    }
   }
   return null;
 }
