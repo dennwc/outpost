@@ -46,7 +46,7 @@ const PR_CREATE_RE = /^gh\s+pr\s+create(\s|$)/;
 // The same write through the REST API — `POST /repos/{owner}/{repo}/pulls`, by `gh api` or by
 // curl — which is how row 8 opens a PR where `gh` isn't installed. No method check: a draft is
 // a write by construction, and a GET of that endpoint never reaches one.
-const PULLS_ENDPOINT_RE = /^(?:curl|gh\s+api)\s[\s\S]*?(?:^|[\s"'/])repos\/[^/\s"']+\/[^/\s"']+\/pulls["']?(?:\s|$)/;
+const PULLS_ENDPOINT_RE = /^(?:curl|gh\s+api)\s[\s\S]*?(?:^|[\s"'/])repos\/[^/\s"']+\/[^/\s"']+\/pulls\/?(?:\?[^\s"']*)?["']?(?:\s|$)/;
 const opensPr = (bash: string) => PR_CREATE_RE.test(bash) || PULLS_ENDPOINT_RE.test(bash);
 
 // The PR a drafted `gh pr create` (or its REST spelling) would duplicate, or undefined if opening one is legitimate.

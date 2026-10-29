@@ -179,7 +179,10 @@ describe('opening a PR through the REST API counts as opening a PR', () => {
     for (const bash of [
       `curl -sS -X POST ${AUTH} https://api.github.com/repos/o/r/pulls -d @/tmp/pr.json`,
       `curl -sS -X POST ${AUTH} 'https://api.github.com/repos/o/r/pulls' -d @/tmp/pr.json`,
+      `curl -sS -X POST ${AUTH} https://api.github.com/repos/o/r/pulls/ -d @/tmp/pr.json`,
+      `curl -sS -X POST ${AUTH} "https://api.github.com/repos/o/r/pulls?x=1" -d @/tmp/pr.json`,
       'gh api --method POST /repos/o/r/pulls --input /tmp/pr.json',
+      'gh api --method POST repos/o/r/pulls/ --input /tmp/pr.json',
       'gh api --method POST repos/{owner}/{repo}/pulls --input /tmp/pr.json',
     ]) {
       expect(duplicatePrCreate(step, [{ bash }]), bash).toBe('https://github.com/o/r/pull/7');

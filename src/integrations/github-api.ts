@@ -69,7 +69,11 @@ export class GitHubApi {
     });
     if (!res.ok) {
       let detail = '';
-      try { detail = ((await res.json()) as { message?: string }).message ?? ''; } catch { /* non-JSON body */ }
+      try {
+        const body = (await res.json()) as { message?: string; errors?: Array<string | { message?: string; code?: string }> };
+        const errors = (body.errors ?? []).map((e) => (typeof e === 'string' ? e : e.message ?? e.code)).filter(Boolean);
+        detail = [body.message, ...errors].filter(Boolean).join(': ');
+      } catch { /* non-JSON body */ }
       throw new Error(`GitHub API ${init.method ?? 'GET'} ${url.replace(API_ROOT, '')}: HTTP ${res.status}${detail ? ` — ${detail}` : ''}`);
     }
     return res;

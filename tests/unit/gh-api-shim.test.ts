@@ -54,6 +54,15 @@ describe('gh api', () => {
     const { api } = fakeApi(() => ({ status: 404, json: { message: 'Not Found' } }));
     await expect(run(api, ['api', 'user'])).rejects.toThrow(/HTTP 404 — Not Found/);
   });
+
+  it('keeps the errors[] detail a 422 carries, which is the part that says what went wrong', async () => {
+    const { api } = fakeApi(() => ({
+      status: 422,
+      json: { message: 'Validation Failed', errors: [{ message: 'A pull request already exists for o:fix/x.' }, { code: 'invalid' }] },
+    }));
+    await expect(run(api, ['api', 'user']))
+      .rejects.toThrow('HTTP 422 — Validation Failed: A pull request already exists for o:fix/x.: invalid');
+  });
 });
 
 describe('gh pr list / pr view', () => {
@@ -113,6 +122,14 @@ describe('gh pr list / pr view', () => {
   it('fails a missing PR rather than printing an empty object', async () => {
     const { api } = fakeApi(() => ({ json: { data: { repository: { pullRequests: { nodes: [] } } } } }));
     await expect(run(api, ['pr', 'view', 'fix/x', '--json', 'url'])).rejects.toThrow(/no pull requests found/);
+  });
+
+  it('resolves a branch to its open PR first, then to its newest in any state', async () => {
+    const { api, calls } = fakeApi((c) => ({
+      json: { data: { repository: { pullRequests: { nodes: c.body!.variables!.states ? [] : [{ url: 'https://github.com/o/r/pull/3' }] } } } },
+    }));
+    expect(await run(api, ['pr', 'view', 'fix/x', '--json', 'url'])).toEqual({ url: 'https://github.com/o/r/pull/3' });
+    expect(calls.map((c) => c.body!.variables!.states)).toEqual([['OPEN'], null]);
   });
 
   it('surfaces a GraphQL error as a failure', async () => {

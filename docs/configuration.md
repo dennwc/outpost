@@ -8,8 +8,8 @@ The background service doesn't inherit your shell's environment, so anything Cla
 
 ```bash
 # The daemon's GitHub identity: PR creation, the PR watcher, review intake.
-# With it, Outpost calls the GitHub API directly and needs no `gh` binary;
-# without it, those calls fall back to `gh` and its own auth.
+# `gh` uses it when installed; without `gh`, Outpost calls the GitHub API
+# directly with it. With neither, GitHub features are off.
 GITHUB_TOKEN=ghp_...
 
 # Turns on the built-in hourly Linear intake routine (one job per issue assigned to you).

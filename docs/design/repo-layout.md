@@ -38,7 +38,7 @@ src/
   integrations/          # external polling
     linear-{api,writer}.ts, pr-watcher.ts, user-prs-watcher.ts, usage-{poller,ledger}.ts
     review-intake.ts       # PRs by others → one review job each, plan generated without the planner
-    gh-cli.ts              # runGh: the one GitHub seam — API via gh-api-shim.ts when GITHUB_TOKEN is set, else the gh binary
+    gh-cli.ts              # runGh: the one GitHub seam — the gh binary, or the API via gh-api-shim.ts when gh is missing and GITHUB_TOKEN is set
     github-api.ts, gh-api-shim.ts  # REST/GraphQL client; gh argv → API calls printing gh's JSON
     pr-file-patches.ts     # per-file PR diffs, fetched on demand + cached by head sha (NOT persisted
                            # onto the job); what lets a review comment render inside its hunk

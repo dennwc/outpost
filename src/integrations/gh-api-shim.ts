@@ -237,8 +237,8 @@ async function prList(api: GitHubApi, { owner, repo }: GitHubRepo, p: Parsed, ar
   return (data.repository?.pullRequests.nodes ?? []).map((n) => pick(prFromNode(n), fields));
 }
 
-// `gh pr view <url|number|branch>`. A branch argument resolves to that branch's most recent PR,
-// open or not, which is what gh does when nothing is checked out under that name.
+// `gh pr view <url|number|branch>`. A branch argument resolves to that branch's newest open PR,
+// else its newest PR in any state, the way gh prefers an open one.
 async function prView(
   api: GitHubApi, cwd: string, repoOf: (cwd: string) => Promise<GitHubRepo>, p: Parsed, args: string[],
 ): Promise<unknown> {
@@ -255,12 +255,15 @@ async function prView(
     );
     node = data.repository?.pullRequest ?? undefined;
   } else {
-    const data = await api.graphql<{ repository: { pullRequests: { nodes: PrNode[] } } | null }>(
-      `query($owner:String!,$repo:String!,$head:String!){ repository(owner:$owner,name:$repo){
-        pullRequests(headRefName:$head,first:1,orderBy:{field:CREATED_AT,direction:DESC}){ nodes{ ${sel} } } } }`,
-      { owner, repo, head: target },
-    );
-    node = data.repository?.pullRequests.nodes[0];
+    for (const states of [['OPEN'], null]) {
+      const data = await api.graphql<{ repository: { pullRequests: { nodes: PrNode[] } } | null }>(
+        `query($owner:String!,$repo:String!,$head:String!,$states:[PullRequestState!]){ repository(owner:$owner,name:$repo){
+          pullRequests(headRefName:$head,states:$states,first:1,orderBy:{field:CREATED_AT,direction:DESC}){ nodes{ ${sel} } } } }`,
+        { owner, repo, head: target, states },
+      );
+      node = data.repository?.pullRequests.nodes[0];
+      if (node) break;
+    }
   }
   if (!node) throw new Error(`no pull requests found for ${target}`);
   return pick(prFromNode(node), fields);
